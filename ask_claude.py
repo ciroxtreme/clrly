@@ -37,24 +37,19 @@ def send_telegram_photo(caption: str, photo_path: str):
     except Exception as e:
         print(f"[TG Photo Error] {e}")
 
-def try_solve_turnstile(page, timeout=35):
-    """
-    Menembus Cloudflare Turnstile Challenge via deteksi frame dan interaksi koordinat/selector.
-    """
-    print("🛡️ [Turnstile Solver] Memantau dan menembus Cloudflare Challenge...")
+def try_solve_turnstile(page, timeout=30):
+    print("🛡️ [Turnstile Solver] Memeriksa apakah ada Cloudflare Turnstile Challenge...")
     start_time = time.time()
     
     while time.time() - start_time < timeout:
         title = (page.title() or "").lower()
         url = page.url.lower()
         
-        # Jika sudah tidak ada challenge di URL dan title, cek input
         if "challenge" not in url and "just a moment" not in title and "tunggu sebentar" not in title:
             if page.locator("div[contenteditable='true'], div.ProseMirror, textarea").count() > 0:
                 print("🎉 [Turnstile Solver] Lolos dari Cloudflare! Halaman chat aktif.")
                 return True
 
-        # 1. Cari frame challenges.cloudflare.com
         for frame in page.frames:
             if "challenges.cloudflare.com" in frame.url or "cloudflare" in frame.url:
                 try:
@@ -76,7 +71,6 @@ def try_solve_turnstile(page, timeout=35):
                 except Exception:
                     pass
 
-        # 2. Fallback: Deteksi iframe locator di main frame lalu klik koordinat
         try:
             iframe_loc = page.locator("iframe[src*='challenges.cloudflare.com'], iframe[title*='Cloudflare security challenge'], iframe[title*='Turnstile']").first
             if iframe_loc.count() > 0 and iframe_loc.is_visible(timeout=1000):
@@ -145,7 +139,6 @@ def main():
     
     with sync_playwright() as p:
         browser = p.chromium.launch(**launch_kwargs)
-        # Gunakan fingerprint Desktop Windows Chrome standar (konsisten dengan arsitektur x86_64 runner)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
             viewport={"width": 1366, "height": 768},
@@ -164,24 +157,33 @@ def main():
         print(f"✅ [Patchright] Berhasil menginjeksi {added_count}/{len(playwright_cookies)} cookies ke sesi browser.")
         page = context.new_page()
 
-        print("1. Membuka https://claude.ai/new dengan Patchright...")
+        print("1. Membuka https://claude.ai/new?forward=off dengan Patchright...")
         try:
-            page.goto("https://claude.ai/new", wait_until="domcontentloaded", timeout=45000)
+            page.goto("https://claude.ai/new?forward=off", wait_until="commit", timeout=30000)
         except Exception as e:
             print(f"Peringatan saat goto: {e}")
             
-        print("⏳ Menunggu initial loading (5 detik)...")
-        time.sleep(5)
-
-        # Cek apakah ada Cloudflare challenge redirect
-        if "challenge" in page.url or "tunggu sebentar" in page.title().lower() or "just a moment" in page.title().lower():
-            print("🛡️ [CLAUDE RELAY] Terdeteksi Cloudflare Turnstile Challenge! Menjalankan Turnstile Solver...")
-            try_solve_turnstile(page, timeout=35)
-            time.sleep(5)
+        print("⏳ Menunggu rendering SPA Claude...")
+        # Polling dinamis menunggu SPA hydrates atau challenge muncul
+        for i in range(12):
+            time.sleep(2.5)
+            url = page.url.lower()
+            title = page.title()
+            print(f"[{i*2.5:.1f}s] Current URL: {page.url} | Title: {title}")
+            
+            if "challenge" in url or "tunggu sebentar" in title.lower() or "just a moment" in title.lower():
+                print("🛡️ [CLAUDE RELAY] Terdeteksi Cloudflare Turnstile Challenge! Menjalankan Turnstile Solver...")
+                try_solve_turnstile(page, timeout=30)
+                break
+                
+            # Jika elemen chat input sudah muncul, langsung gas
+            if page.locator("div[contenteditable='true'], div.ProseMirror, textarea").count() > 0:
+                print("✨ Input chat sudah siap!")
+                break
 
         page_title = page.title()
-        print(f"Title: {page_title}")
-        print(f"Current URL: {page.url}")
+        print(f"Final Page Title: {page_title}")
+        print(f"Final URL: {page.url}")
         
         screenshot_file = "claude_screen.png"
         try:
