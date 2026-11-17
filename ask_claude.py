@@ -10,6 +10,7 @@ CLAUDE_COOKIES_JSON = os.environ.get("CLAUDE_COOKIES_JSON")
 CLAUDE_ORG_ID = os.environ.get("CLAUDE_ORG_ID")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+WEBSHARE_ROTATING_PROXY = os.environ.get("WEBSHARE_ROTATING_PROXY")
 PROMPT = sys.argv[1] if len(sys.argv) > 1 else "Halo Claude, apakah sesi ini aktif?"
 
 def send_telegram_msg(text: str):
@@ -125,24 +126,31 @@ def main():
             }
         playwright_cookies.append(c_obj)
 
+    launch_args = [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage"
+    ]
+    
+    launch_kwargs = {
+        "headless": True,
+        "args": launch_args
+    }
+    
+    if WEBSHARE_ROTATING_PROXY:
+        print(f"🌐 [Proxy] Mengaktifkan Residential/Rotating Proxy...")
+        launch_kwargs["proxy"] = {"server": WEBSHARE_ROTATING_PROXY}
+
     print(f"🚀 [Patchright Stealth Engine] Menyiapkan browser anti-detect dengan {len(playwright_cookies)} cookies...")
     
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage"
-            ]
-        )
+        browser = p.chromium.launch(**launch_kwargs)
+        # Gunakan fingerprint Desktop Windows Chrome standar (konsisten dengan arsitektur x86_64 runner)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Linux; Android 15; Infinix X6880 Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/157.0.8103.38 Mobile Safari/537.36",
-            viewport={"width": 393, "height": 851},
-            is_mobile=True,
-            has_touch=True,
-            locale="id-ID",
-            timezone_id="Asia/Jakarta",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+            viewport={"width": 1366, "height": 768},
+            locale="en-US",
+            timezone_id="America/New_York",
         )
         
         added_count = 0
@@ -158,7 +166,7 @@ def main():
 
         print("1. Membuka https://claude.ai/new dengan Patchright...")
         try:
-            page.goto("https://claude.ai/new", wait_until="commit", timeout=30000)
+            page.goto("https://claude.ai/new", wait_until="domcontentloaded", timeout=45000)
         except Exception as e:
             print(f"Peringatan saat goto: {e}")
             
@@ -168,7 +176,7 @@ def main():
         # Cek apakah ada Cloudflare challenge redirect
         if "challenge" in page.url or "tunggu sebentar" in page.title().lower() or "just a moment" in page.title().lower():
             print("🛡️ [CLAUDE RELAY] Terdeteksi Cloudflare Turnstile Challenge! Menjalankan Turnstile Solver...")
-            try_solve_turnstile(page, timeout=30)
+            try_solve_turnstile(page, timeout=35)
             time.sleep(5)
 
         page_title = page.title()
