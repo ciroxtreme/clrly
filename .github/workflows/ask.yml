@@ -1,0 +1,35 @@
+name: Ask Claude Relay
+
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Pertanyaan untuk Claude"
+        required: true
+        default: "Halo Claude, apakah sesi aktif?"
+
+jobs:
+  ask-claude:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Run Claude Relay
+        env:
+          CLAUDE_COOKIES_JSON: ${{ secrets.CLAUDE_COOKIES_JSON }}
+          CLAUDE_ORG_ID: ${{ secrets.CLAUDE_ORG_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python ask_claude.py "${{ github.event.inputs.prompt }}"
