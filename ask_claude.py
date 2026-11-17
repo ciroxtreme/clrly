@@ -35,12 +35,21 @@ def main():
     cookies_dict = json.loads(CLAUDE_COOKIES_JSON)
     playwright_cookies = []
     for k, v in cookies_dict.items():
-        playwright_cookies.append({
-            "name": k,
-            "value": str(v),
-            "domain": ".claude.ai",
+        clean_k = k.strip()
+        clean_v = str(v).strip()
+        if not clean_k or not clean_v or clean_k.startswith("q=") or clean_k.startswith("v="):
+            continue
+        c_obj = {
+            "name": clean_k,
+            "value": clean_v,
             "path": "/",
-        })
+        }
+        if clean_k.startswith("__Host-"):
+            c_obj["url"] = "https://claude.ai"
+            c_obj["secure"] = True
+        else:
+            c_obj["domain"] = ".claude.ai"
+        playwright_cookies.append(c_obj)
 
     print(f"🚀 Meluncurkan browser headless dengan profil sesi Tuan Ciro ({len(playwright_cookies)} cookies)...")
     
