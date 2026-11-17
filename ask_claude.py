@@ -27,69 +27,6 @@ def send_telegram_msg(text: str):
     except Exception as e:
         print(f"[TG Error] {e}")
 
-def send_telegram_photo(caption: str, photo_path: str):
-    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID and os.path.exists(photo_path)):
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-    try:
-        with open(photo_path, "rb") as f:
-            requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption}, files={"photo": f}, timeout=20)
-    except Exception as e:
-        print(f"[TG Photo Error] {e}")
-
-def try_solve_turnstile(page, timeout=30):
-    print("🛡️ [Turnstile Solver] Memeriksa apakah ada Cloudflare Turnstile Challenge...")
-    start_time = time.time()
-    
-    while time.time() - start_time < timeout:
-        title = (page.title() or "").lower()
-        url = page.url.lower()
-        
-        if "challenge" not in url and "just a moment" not in title and "tunggu sebentar" not in title:
-            if page.locator("div[contenteditable='true'], div.ProseMirror, textarea").count() > 0:
-                print("🎉 [Turnstile Solver] Lolos dari Cloudflare! Halaman chat aktif.")
-                return True
-
-        for frame in page.frames:
-            if "challenges.cloudflare.com" in frame.url or "cloudflare" in frame.url:
-                try:
-                    candidates = [
-                        "input[type='checkbox']",
-                        "#challenge-stage",
-                        ".ctp-checkbox-label",
-                        ".cb-i",
-                        "label[for]",
-                        "body"
-                    ]
-                    for sel in candidates:
-                        target = frame.locator(sel).first
-                        if target.is_visible(timeout=1000):
-                            print(f"👉 [Turnstile Solver] Klik checkbox Turnstile di dalam frame ({sel})...")
-                            target.click(force=True, timeout=2000)
-                            time.sleep(3)
-                            break
-                except Exception:
-                    pass
-
-        try:
-            iframe_loc = page.locator("iframe[src*='challenges.cloudflare.com'], iframe[title*='Cloudflare security challenge'], iframe[title*='Turnstile']").first
-            if iframe_loc.count() > 0 and iframe_loc.is_visible(timeout=1000):
-                box = iframe_loc.bounding_box()
-                if box and box['width'] > 0 and box['height'] > 0:
-                    click_x = box['x'] + random.uniform(28, 35)
-                    click_y = box['y'] + (box['height'] / 2) + random.uniform(-2, 2)
-                    print(f"🎯 [Turnstile Solver] Klik koordinat checkbox ({int(click_x)}, {int(click_y)})...")
-                    page.mouse.move(click_x - random.uniform(20, 40), click_y - random.uniform(15, 30))
-                    time.sleep(0.15)
-                    page.mouse.click(click_x, click_y)
-                    time.sleep(3)
-        except Exception:
-            pass
-
-        time.sleep(1.5)
-
-    return False
-
 def main():
     if not CLAUDE_COOKIES_JSON:
         print("Error: CLAUDE_COOKIES_JSON not set!")
@@ -157,26 +94,24 @@ def main():
         print(f"✅ [Patchright] Berhasil menginjeksi {added_count}/{len(playwright_cookies)} cookies ke sesi browser.")
         page = context.new_page()
 
-        print("1. Membuka https://claude.ai/new?forward=off dengan Patchright...")
+        print("1. Membuka https://claude.ai/chats dengan Patchright...")
         try:
-            page.goto("https://claude.ai/new?forward=off", wait_until="commit", timeout=30000)
+            page.goto("https://claude.ai/chats", wait_until="commit", timeout=30000)
         except Exception as e:
             print(f"Peringatan saat goto: {e}")
             
-        print("⏳ Menunggu rendering SPA Claude...")
-        # Polling dinamis menunggu SPA hydrates atau challenge muncul
-        for i in range(12):
-            time.sleep(2.5)
-            url = page.url.lower()
-            title = page.title()
-            print(f"[{i*2.5:.1f}s] Current URL: {page.url} | Title: {title}")
-            
-            if "challenge" in url or "tunggu sebentar" in title.lower() or "just a moment" in title.lower():
-                print("🛡️ [CLAUDE RELAY] Terdeteksi Cloudflare Turnstile Challenge! Menjalankan Turnstile Solver...")
-                try_solve_turnstile(page, timeout=30)
-                break
-                
-            # Jika elemen chat input sudah muncul, langsung gas
+        print("⏳ Menunggu rendering dan deteksi DOM...")
+        for i in range(10):
+            time.sleep(2)
+            try:
+                url = page.url
+                title = page.title()
+                html_len = len(page.content())
+                body_txt = page.evaluate("() => document.body ? document.body.innerText.substring(0, 100).replace(/\\n/g, ' ') : ''")
+                print(f"[{i*2}s] URL: {url} | Title: '{title}' | HTML: {html_len}B | Body: '{body_txt}'")
+            except Exception as e:
+                print(f"Error inspecting: {e}")
+
             if page.locator("div[contenteditable='true'], div.ProseMirror, textarea").count() > 0:
                 print("✨ Input chat sudah siap!")
                 break
@@ -184,12 +119,6 @@ def main():
         page_title = page.title()
         print(f"Final Page Title: {page_title}")
         print(f"Final URL: {page.url}")
-        
-        screenshot_file = "claude_screen.png"
-        try:
-            page.screenshot(path=screenshot_file, timeout=5000)
-        except Exception as e:
-            print(f"Gagal screenshot: {e}")
 
         # Cari elemen input chat Claude
         input_selectors = [
@@ -204,7 +133,7 @@ def main():
         for sel in input_selectors:
             loc = page.locator(sel).first
             try:
-                if loc.is_visible(timeout=3000):
+                if loc.is_visible(timeout=2000):
                     input_box = loc
                     print(f"Ditemukan input element dengan selector: {sel}")
                     break
@@ -250,12 +179,10 @@ def main():
             elif "login" in page.url.lower() or "Log in" in page_title:
                 msg = "🔒 [CLAUDE RELAY] Terlempar ke halaman Login (Cookie sesi Claude perlu diperbarui)."
             else:
-                msg = f"⚠️ [CLAUDE RELAY] Halaman termuat: {page_title} ({page.url})"
+                msg = f"⚠️ [CLAUDE RELAY] Halaman termuat: '{page_title}' ({page.url})"
             
             print(msg)
             send_telegram_msg(msg)
-            if os.path.exists(screenshot_file):
-                send_telegram_photo(f"Status Layar Claude ({page_title})", screenshot_file)
 
         browser.close()
 
