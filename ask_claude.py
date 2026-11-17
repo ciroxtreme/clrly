@@ -2,15 +2,13 @@ import os
 import sys
 import json
 import time
-import urllib.request
-import urllib.parse
+import requests
 from playwright.sync_api import sync_playwright
 
 CLAUDE_COOKIES_JSON = os.environ.get("CLAUDE_COOKIES_JSON")
 CLAUDE_ORG_ID = os.environ.get("CLAUDE_ORG_ID")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-WEBSHARE_ROTATING_PROXY = os.environ.get("WEBSHARE_ROTATING_PROXY")
 PROMPT = sys.argv[1] if len(sys.argv) > 1 else "Halo Claude, apakah sesi ini aktif?"
 
 def send_telegram_msg(text: str):
@@ -18,15 +16,24 @@ def send_telegram_msg(text: str):
         print(f"[TG] {text}")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = urllib.parse.urlencode({
+    payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text
-    }).encode("utf-8")
+    }
     try:
-        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/x-www-form-urlencoded"})
-        urllib.request.urlopen(req, timeout=10)
+        requests.post(url, data=payload, timeout=10)
     except Exception as e:
         print(f"[TG Error] {e}")
+
+def send_telegram_photo(caption: str, photo_path: str):
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID and os.path.exists(photo_path)):
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+    try:
+        with open(photo_path, "rb") as f:
+            requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption}, files={"photo": f}, timeout=20)
+    except Exception as e:
+        print(f"[TG Photo Error] {e}")
 
 def main():
     if not CLAUDE_COOKIES_JSON:
@@ -60,22 +67,16 @@ def main():
 
     print(f"🚀 Menyiapkan browser dengan {len(playwright_cookies)} cookies...")
     
-    launch_options = {
-        "headless": True,
-        "args": [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled"
-        ]
-    }
-    
-    if WEBSHARE_ROTATING_PROXY:
-        print("🌐 Menggunakan Webshare Rotating Proxy untuk runner...")
-        launch_options["proxy"] = {"server": WEBSHARE_ROTATING_PROXY}
-
     with sync_playwright() as p:
-        browser = p.chromium.launch(**launch_options)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled"
+            ]
+        )
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Linux; Android 15; Infinix X6880 Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/157.0.8103.38 Mobile Safari/537.36",
             viewport={"width": 393, "height": 851},
@@ -94,23 +95,30 @@ def main():
             except Exception as e:
                 print(f"Peringatan cookie {c.get('name')}: {e}")
                 
-        print(f"✅ Berhasil menginjeksi {added_count}/{len(playwright_cookies)} cookies ke sesi browser.")
+        print(f"✅ Berhasil menginjeksi {added_count}/{len(playwright_cookies)} cookies.")
         page = context.new_page()
 
         print("1. Membuka https://claude.ai/new...")
         try:
-            page.goto("https://claude.ai/new", wait_until="domcontentloaded", timeout=45000)
+            page.goto("https://claude.ai/new", wait_until="commit", timeout=30000)
         except Exception as e:
             print(f"Peringatan saat goto: {e}")
             
-        time.sleep(8)
+        # Beri waktu rendering JavaScript SPA
+        time.sleep(10)
 
-        # Cek apakah lolos masuk ke chat room
         page_title = page.title()
         print(f"Title: {page_title}")
         print(f"Current URL: {page.url}")
         
-        # Cari input chat Claude (contenteditable atau textarea atau p)
+        # Ambil screenshot kondisi nyata layar
+        screenshot_file = "claude_screen.png"
+        try:
+            page.screenshot(path=screenshot_file, timeout=5000)
+        except Exception as e:
+            print(f"Gagal screenshot: {e}")
+
+        # Cari elemen input chat Claude
         input_selectors = [
             "div[contenteditable='true']",
             "fieldset div[contenteditable='true']",
@@ -162,19 +170,19 @@ def main():
             
             send_telegram_msg(f"🤖 [CLAUDE RELAY BERHASIL!]\n\nTuan Ciro, Claude menjawab:\n\n{reply_text}")
         else:
-            print("⚠️ Kotak input chat belum terlihat...")
-            page.screenshot(path="claude_status.png")
+            print("⚠️ Kotak input chat belum terlihat, mendeteksi halaman...")
             page_content = page.content()
-            # Cek apakah ada Cloudflare challenge
             if "Just a moment" in page_content or "challenges.cloudflare.com" in page_content:
-                print("🛡️ Cloudflare Turnstile menghadang!")
-                send_telegram_msg("🛡️ [CLAUDE RELAY] Terhalang Cloudflare Challenge!")
+                msg = "🛡️ [CLAUDE RELAY] Sesi terhadang Cloudflare Challenge!"
             elif "login" in page.url.lower() or "Log in" in page_title:
-                print("🔒 Halaman redirect ke Login (Sesi kadaluarsa atau cookie butuh refresh)!")
-                send_telegram_msg("🔒 [CLAUDE RELAY] Terlempar ke halaman Login (cookie expired/invalid).")
+                msg = "🔒 [CLAUDE RELAY] Terlempar ke halaman Login (Cookie sesi Claude perlu diperbarui)."
             else:
-                print(f"⚠️ Sesi Claude status page: {page_title} ({page.url})")
-                send_telegram_msg(f"⚠️ [CLAUDE RELAY] Status page: {page_title} ({page.url})")
+                msg = f"⚠️ [CLAUDE RELAY] Halaman termuat: {page_title} ({page.url})"
+            
+            print(msg)
+            send_telegram_msg(msg)
+            if os.path.exists(screenshot_file):
+                send_telegram_photo(f"Status Layar Claude ({page_title})", screenshot_file)
 
         browser.close()
 
