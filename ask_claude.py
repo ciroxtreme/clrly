@@ -3,6 +3,7 @@ import sys
 import json
 import time
 import requests
+import random
 from patchright.sync_api import sync_playwright
 
 CLAUDE_COOKIES_JSON = os.environ.get("CLAUDE_COOKIES_JSON")
@@ -34,6 +35,65 @@ def send_telegram_photo(caption: str, photo_path: str):
             requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption}, files={"photo": f}, timeout=20)
     except Exception as e:
         print(f"[TG Photo Error] {e}")
+
+def try_solve_turnstile(page, timeout=35):
+    """
+    Menembus Cloudflare Turnstile Challenge via deteksi frame dan interaksi koordinat/selector.
+    """
+    print("🛡️ [Turnstile Solver] Memantau dan menembus Cloudflare Challenge...")
+    start_time = time.time()
+    
+    while time.time() - start_time < timeout:
+        title = (page.title() or "").lower()
+        url = page.url.lower()
+        
+        # Jika sudah tidak ada challenge di URL dan title, cek input
+        if "challenge" not in url and "just a moment" not in title and "tunggu sebentar" not in title:
+            if page.locator("div[contenteditable='true'], div.ProseMirror, textarea").count() > 0:
+                print("🎉 [Turnstile Solver] Lolos dari Cloudflare! Halaman chat aktif.")
+                return True
+
+        # 1. Cari frame challenges.cloudflare.com
+        for frame in page.frames:
+            if "challenges.cloudflare.com" in frame.url or "cloudflare" in frame.url:
+                try:
+                    candidates = [
+                        "input[type='checkbox']",
+                        "#challenge-stage",
+                        ".ctp-checkbox-label",
+                        ".cb-i",
+                        "label[for]",
+                        "body"
+                    ]
+                    for sel in candidates:
+                        target = frame.locator(sel).first
+                        if target.is_visible(timeout=1000):
+                            print(f"👉 [Turnstile Solver] Klik checkbox Turnstile di dalam frame ({sel})...")
+                            target.click(force=True, timeout=2000)
+                            time.sleep(3)
+                            break
+                except Exception:
+                    pass
+
+        # 2. Fallback: Deteksi iframe locator di main frame lalu klik koordinat
+        try:
+            iframe_loc = page.locator("iframe[src*='challenges.cloudflare.com'], iframe[title*='Cloudflare security challenge'], iframe[title*='Turnstile']").first
+            if iframe_loc.count() > 0 and iframe_loc.is_visible(timeout=1000):
+                box = iframe_loc.bounding_box()
+                if box and box['width'] > 0 and box['height'] > 0:
+                    click_x = box['x'] + random.uniform(28, 35)
+                    click_y = box['y'] + (box['height'] / 2) + random.uniform(-2, 2)
+                    print(f"🎯 [Turnstile Solver] Klik koordinat checkbox ({int(click_x)}, {int(click_y)})...")
+                    page.mouse.move(click_x - random.uniform(20, 40), click_y - random.uniform(15, 30))
+                    time.sleep(0.15)
+                    page.mouse.click(click_x, click_y)
+                    time.sleep(3)
+        except Exception:
+            pass
+
+        time.sleep(1.5)
+
+    return False
 
 def main():
     if not CLAUDE_COOKIES_JSON:
@@ -68,8 +128,6 @@ def main():
     print(f"🚀 [Patchright Stealth Engine] Menyiapkan browser anti-detect dengan {len(playwright_cookies)} cookies...")
     
     with sync_playwright() as p:
-        # Patchright chromium secara native mem-patch C++ internal runtime Chrome
-        # sehingga tidak membocorkan bendera navigator.webdriver atau CDP automation
         browser = p.chromium.launch(
             headless=True,
             args=[
@@ -104,15 +162,19 @@ def main():
         except Exception as e:
             print(f"Peringatan saat goto: {e}")
             
-        # Tunggu rendering dan biarkan Patchright memproses handshake Cloudflare jika muncul
-        print("⏳ Menunggu verifikasi dan loading halaman (15 detik)...")
-        time.sleep(15)
+        print("⏳ Menunggu initial loading (5 detik)...")
+        time.sleep(5)
+
+        # Cek apakah ada Cloudflare challenge redirect
+        if "challenge" in page.url or "tunggu sebentar" in page.title().lower() or "just a moment" in page.title().lower():
+            print("🛡️ [CLAUDE RELAY] Terdeteksi Cloudflare Turnstile Challenge! Menjalankan Turnstile Solver...")
+            try_solve_turnstile(page, timeout=30)
+            time.sleep(5)
 
         page_title = page.title()
         print(f"Title: {page_title}")
         print(f"Current URL: {page.url}")
         
-        # Ambil screenshot kondisi nyata layar
         screenshot_file = "claude_screen.png"
         try:
             page.screenshot(path=screenshot_file, timeout=5000)
