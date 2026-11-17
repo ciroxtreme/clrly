@@ -10,6 +10,7 @@ CLAUDE_COOKIES_JSON = os.environ.get("CLAUDE_COOKIES_JSON")
 CLAUDE_ORG_ID = os.environ.get("CLAUDE_ORG_ID")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+WEBSHARE_ROTATING_PROXY = os.environ.get("WEBSHARE_ROTATING_PROXY")
 PROMPT = sys.argv[1] if len(sys.argv) > 1 else "Halo Claude, apakah sesi ini aktif?"
 
 def send_telegram_msg(text: str):
@@ -40,9 +41,6 @@ def main():
         if not clean_k or not clean_v or clean_k.startswith("q=") or clean_k.startswith("v="):
             continue
         
-        # Format cookie Playwright yang 100% valid:
-        # Gunakan 'domain' dan 'path' eksplisit untuk semua cookie.
-        # Khusus prefix __Host-, domain tidak boleh diawali titik (tidak boleh .claude.ai melainkan claude.ai) dan harus secure=True
         if clean_k.startswith("__Host-"):
             c_obj = {
                 "name": clean_k,
@@ -62,16 +60,22 @@ def main():
 
     print(f"🚀 Menyiapkan browser dengan {len(playwright_cookies)} cookies...")
     
+    launch_options = {
+        "headless": True,
+        "args": [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled"
+        ]
+    }
+    
+    if WEBSHARE_ROTATING_PROXY:
+        print("🌐 Menggunakan Webshare Rotating Proxy untuk runner...")
+        launch_options["proxy"] = {"server": WEBSHARE_ROTATING_PROXY}
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled"
-            ]
-        )
+        browser = p.chromium.launch(**launch_options)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Linux; Android 15; Infinix X6880 Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/157.0.8103.38 Mobile Safari/537.36",
             viewport={"width": 393, "height": 851},
@@ -82,7 +86,6 @@ def main():
         )
         context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
         
-        # Tambahkan cookies satu per satu agar jika ada 1 cookie minor yang ditolak, tidak menggagalkan seluruh proses
         added_count = 0
         for c in playwright_cookies:
             try:
@@ -95,8 +98,12 @@ def main():
         page = context.new_page()
 
         print("1. Membuka https://claude.ai/new...")
-        page.goto("https://claude.ai/new", wait_until="networkidle", timeout=60000)
-        time.sleep(5)
+        try:
+            page.goto("https://claude.ai/new", wait_until="domcontentloaded", timeout=45000)
+        except Exception as e:
+            print(f"Peringatan saat goto: {e}")
+            
+        time.sleep(8)
 
         # Cek apakah lolos masuk ke chat room
         page_title = page.title()
@@ -155,7 +162,7 @@ def main():
             
             send_telegram_msg(f"🤖 [CLAUDE RELAY BERHASIL!]\n\nTuan Ciro, Claude menjawab:\n\n{reply_text}")
         else:
-            print("⚠️ Kotak input chat belum terlihat, mengambil screenshot status...")
+            print("⚠️ Kotak input chat belum terlihat...")
             page.screenshot(path="claude_status.png")
             page_content = page.content()
             # Cek apakah ada Cloudflare challenge
@@ -166,7 +173,7 @@ def main():
                 print("🔒 Halaman redirect ke Login (Sesi kadaluarsa atau cookie butuh refresh)!")
                 send_telegram_msg("🔒 [CLAUDE RELAY] Terlempar ke halaman Login (cookie expired/invalid).")
             else:
-                print(f"⚠️ Sesi Claude belum menampilkan input chat. Title: {page_title}")
+                print(f"⚠️ Sesi Claude status page: {page_title} ({page.url})")
                 send_telegram_msg(f"⚠️ [CLAUDE RELAY] Status page: {page_title} ({page.url})")
 
         browser.close()
