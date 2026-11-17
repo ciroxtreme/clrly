@@ -1,0 +1,42 @@
+name: Claude Session Auto-Refresher
+
+on:
+  schedule:
+    # Berjalan otomatis setiap 4 jam untuk menjaga sesi Claude tetap segar dan awet
+    - cron: '15 */4 * * *'
+  workflow_dispatch:
+
+jobs:
+  refresh-session:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install curl_cffi requests
+
+      - name: Run Claude Evergreen Refresher
+        env:
+          CLAUDE_COOKIES_JSON: ${{ secrets.CLAUDE_COOKIES_JSON }}
+          CLAUDE_ORG_ID: ${{ secrets.CLAUDE_ORG_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WEBSHARE_ROTATING_PROXY: ${{ secrets.WEBSHARE_ROTATING_PROXY }}
+        run: |
+          python refresh_worker.py
+
+      - name: Sync Refreshed Session to GitHub Secret
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -f refreshed_session.json ] && [ -s refreshed_session.json ]; then
+            gh secret set CLAUDE_COOKIES_JSON --repo ${{ github.repository }} < refreshed_session.json
+            echo "✅ Successfully synced CLAUDE_COOKIES_JSON secret automatically!"
+          fi
