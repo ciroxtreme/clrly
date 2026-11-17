@@ -40,17 +40,27 @@ def main():
         if not clean_k or not clean_v or clean_k.startswith("q=") or clean_k.startswith("v="):
             continue
         
-        # Standard Playwright cookie format:
-        # url is sufficient and robust for both standard and __Host- cookies
-        c_obj = {
-            "name": clean_k,
-            "value": clean_v,
-            "url": "https://claude.ai",
-            "path": "/",
-        }
+        # Format cookie Playwright yang 100% valid:
+        # Gunakan 'domain' dan 'path' eksplisit untuk semua cookie.
+        # Khusus prefix __Host-, domain tidak boleh diawali titik (tidak boleh .claude.ai melainkan claude.ai) dan harus secure=True
+        if clean_k.startswith("__Host-"):
+            c_obj = {
+                "name": clean_k,
+                "value": clean_v,
+                "domain": "claude.ai",
+                "path": "/",
+                "secure": True,
+            }
+        else:
+            c_obj = {
+                "name": clean_k,
+                "value": clean_v,
+                "domain": ".claude.ai",
+                "path": "/",
+            }
         playwright_cookies.append(c_obj)
 
-    print(f"🚀 Meluncurkan browser headless dengan profil sesi Tuan Ciro ({len(playwright_cookies)} cookies)...")
+    print(f"🚀 Menyiapkan browser dengan {len(playwright_cookies)} cookies...")
     
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -71,7 +81,17 @@ def main():
             timezone_id="Asia/Jakarta",
         )
         context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-        context.add_cookies(playwright_cookies)
+        
+        # Tambahkan cookies satu per satu agar jika ada 1 cookie minor yang ditolak, tidak menggagalkan seluruh proses
+        added_count = 0
+        for c in playwright_cookies:
+            try:
+                context.add_cookies([c])
+                added_count += 1
+            except Exception as e:
+                print(f"Peringatan cookie {c.get('name')}: {e}")
+                
+        print(f"✅ Berhasil menginjeksi {added_count}/{len(playwright_cookies)} cookies ke sesi browser.")
         page = context.new_page()
 
         print("1. Membuka https://claude.ai/new...")
@@ -84,7 +104,6 @@ def main():
         print(f"Current URL: {page.url}")
         
         # Cari input chat Claude (contenteditable atau textarea atau p)
-        # Claude web biasanya menggunakan div[contenteditable="true"]
         input_selectors = [
             "div[contenteditable='true']",
             "fieldset div[contenteditable='true']",
