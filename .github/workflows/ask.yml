@@ -20,10 +20,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install dependencies (Patchright Stealth Engine)
         run: |
-          pip install playwright requests
-          playwright install --with-deps chromium
+          pip install patchright requests
+          patchright install --with-deps chromium
 
       - name: Run Claude Relay
         env:

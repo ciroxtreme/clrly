@@ -3,7 +3,7 @@ import sys
 import json
 import time
 import requests
-from playwright.sync_api import sync_playwright
+from patchright.sync_api import sync_playwright
 
 CLAUDE_COOKIES_JSON = os.environ.get("CLAUDE_COOKIES_JSON")
 CLAUDE_ORG_ID = os.environ.get("CLAUDE_ORG_ID")
@@ -65,16 +65,17 @@ def main():
             }
         playwright_cookies.append(c_obj)
 
-    print(f"🚀 Menyiapkan browser dengan {len(playwright_cookies)} cookies...")
+    print(f"🚀 [Patchright Stealth Engine] Menyiapkan browser anti-detect dengan {len(playwright_cookies)} cookies...")
     
     with sync_playwright() as p:
+        # Patchright chromium secara native mem-patch C++ internal runtime Chrome
+        # sehingga tidak membocorkan bendera navigator.webdriver atau CDP automation
         browser = p.chromium.launch(
             headless=True,
             args=[
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled"
+                "--disable-dev-shm-usage"
             ]
         )
         context = browser.new_context(
@@ -85,7 +86,6 @@ def main():
             locale="id-ID",
             timezone_id="Asia/Jakarta",
         )
-        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
         
         added_count = 0
         for c in playwright_cookies:
@@ -95,17 +95,18 @@ def main():
             except Exception as e:
                 print(f"Peringatan cookie {c.get('name')}: {e}")
                 
-        print(f"✅ Berhasil menginjeksi {added_count}/{len(playwright_cookies)} cookies.")
+        print(f"✅ [Patchright] Berhasil menginjeksi {added_count}/{len(playwright_cookies)} cookies ke sesi browser.")
         page = context.new_page()
 
-        print("1. Membuka https://claude.ai/new...")
+        print("1. Membuka https://claude.ai/new dengan Patchright...")
         try:
             page.goto("https://claude.ai/new", wait_until="commit", timeout=30000)
         except Exception as e:
             print(f"Peringatan saat goto: {e}")
             
-        # Beri waktu rendering JavaScript SPA
-        time.sleep(10)
+        # Tunggu rendering dan biarkan Patchright memproses handshake Cloudflare jika muncul
+        print("⏳ Menunggu verifikasi dan loading halaman (15 detik)...")
+        time.sleep(15)
 
         page_title = page.title()
         print(f"Title: {page_title}")
@@ -168,7 +169,7 @@ def main():
             print(reply_text)
             print("="*94 + "\n")
             
-            send_telegram_msg(f"🤖 [CLAUDE RELAY BERHASIL!]\n\nTuan Ciro, Claude menjawab:\n\n{reply_text}")
+            send_telegram_msg(f"🤖 [CLAUDE RELAY VIA PATCHRIGHT]\n\nTuan Ciro, Claude menjawab:\n\n{reply_text}")
         else:
             print("⚠️ Kotak input chat belum terlihat, mendeteksi halaman...")
             page_content = page.content()
