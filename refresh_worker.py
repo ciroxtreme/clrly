@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import uuid
 import requests
 from curl_cffi import requests as cffi_requests
 
@@ -36,16 +37,24 @@ def main():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
         "Referer": "https://claude.ai/",
         "Origin": "https://claude.ai",
-        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Accept": "*/*",
         "Cookie": cookie_str
     }
 
     print("🔄 [Claude Evergreen Refresher] Mengirim heartbeat keepalive ke Anthropic...")
     
-    # Heartbeat endpoint 1: Cek list percakapan (memperbarui timestamp sessionKeyLC & activitySessionId)
+    # Heartbeat endpoint: POST ephemeral conversation (metode ini 100% lolos WAF Cloudflare)
+    new_uuid = str(uuid.uuid4())
+    create_payload = {
+        "uuid": new_uuid,
+        "name": f"Keepalive-{int(time.time())}"
+    }
+    
     try:
-        r = cffi_requests.get(
-            f"https://claude.ai/api/organizations/{org_id}/chat_conversations?limit=1",
+        r = cffi_requests.post(
+            f"https://claude.ai/api/organizations/{org_id}/chat_conversations",
+            json=create_payload,
             impersonate="chrome124",
             proxies=proxy_cfg,
             headers=headers,
@@ -57,10 +66,10 @@ def main():
 
     print(f"Heartbeat response status: {r.status_code}")
 
-    if r.status_code == 200:
-        print("✅ SESI CLAUDE SEHAT & BUGAR! (Status 200 OK)")
+    if r.status_code in (200, 201):
+        print("✅ SESI CLAUDE SEHAT & BUGAR! (Status 200/201 OK)")
         
-        # Tangkap jika ada Set-Cookie baru dari server (Cloudflare/Anthropic token rolling)
+        # Tangkap jika ada Set-Cookie baru dari server
         updated_any = False
         for k, v in r.cookies.items():
             if v and cookies_dict.get(k) != v:
@@ -75,18 +84,34 @@ def main():
             json.dump(cookies_dict, f)
         print("📁 refreshed_session.json siap di-sync.")
         
+        # Bersihkan percakapan keepalive tadi agar tidak menumpuk di riwayat
+        try:
+            cffi_requests.delete(
+                f"https://claude.ai/api/organizations/{org_id}/chat_conversations/{new_uuid}",
+                impersonate="chrome124",
+                proxies=proxy_cfg,
+                headers=headers,
+                timeout=10
+            )
+        except Exception:
+            pass
+
     elif r.status_code in (401, 403):
         err_body = r.text[:300]
         print(f"🚨 [CRITICAL] Sesi terdeteksi kadaluarsa / invalid: {err_body}")
         alert_msg = (
-            "🚨 [ALERT CLAUDE RELAY] Sesi Claude Terputus!\n\n"
-            f"Server Anthropic menolak sesi aktif (Status {r.status_code}).\n"
+            "🚨 [ALERT CLAUDE RELAY] Sesi Claude Terputus!
+
+"
+            f"Server Anthropic menolak sesi aktif (Status {r.status_code}).
+"
             "Masa berlaku sessionKey habis atau logout terdeteksi. Silakan ekspor cookie baru dari claude.ai untuk Tuan Ciro!"
         )
         send_telegram_alert(alert_msg)
         sys.exit(1)
     else:
         print(f"⚠️ Respon tidak biasa dari Claude: Status {r.status_code}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
