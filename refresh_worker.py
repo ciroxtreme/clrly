@@ -25,7 +25,7 @@ def send_telegram_alert(text: str):
 
 def main():
     if not CLAUDE_COOKIES_JSON:
-        print("❌ Error: CLAUDE_COOKIES_JSON not set!")
+        print("Error: CLAUDE_COOKIES_JSON not set!")
         sys.exit(1)
 
     cookies_dict = json.loads(CLAUDE_COOKIES_JSON)
@@ -42,15 +42,13 @@ def main():
         "Cookie": cookie_str
     }
 
-    print("🔄 [Claude Evergreen Refresher] Mengirim heartbeat keepalive ke Anthropic...")
-    
-    # Heartbeat endpoint: POST ephemeral conversation (metode ini 100% lolos WAF Cloudflare)
+    print("Refreshing Claude Session keepalive...")
     new_uuid = str(uuid.uuid4())
     create_payload = {
         "uuid": new_uuid,
         "name": f"Keepalive-{int(time.time())}"
     }
-    
+
     try:
         r = cffi_requests.post(
             f"https://claude.ai/api/organizations/{org_id}/chat_conversations",
@@ -61,30 +59,23 @@ def main():
             timeout=25
         )
     except Exception as e:
-        print(f"⚠️ Koneksi heartbeat error: {e}")
+        print(f"Connection error: {e}")
         sys.exit(1)
 
     print(f"Heartbeat response status: {r.status_code}")
 
     if r.status_code in (200, 201):
-        print("✅ SESI CLAUDE SEHAT & BUGAR! (Status 200/201 OK)")
-        
-        # Tangkap jika ada Set-Cookie baru dari server
-        updated_any = False
+        print("SUCCESS! Claude session is alive and valid.")
         for k, v in r.cookies.items():
             if v and cookies_dict.get(k) != v:
                 cookies_dict[k] = v
-                updated_any = True
-                print(f"✨ Cookie diperbarui oleh server: {k}")
+                print(f"Updated cookie: {k}")
 
         cookies_dict["sessionKeyLC"] = str(int(time.time() * 1000))
-        
-        # Tulis ke file untuk di-commit ke GitHub Secret jika ada perubahan
         with open("refreshed_session.json", "w") as f:
             json.dump(cookies_dict, f)
-        print("📁 refreshed_session.json siap di-sync.")
-        
-        # Bersihkan percakapan keepalive tadi agar tidak menumpuk di riwayat
+        print("refreshed_session.json ready.")
+
         try:
             cffi_requests.delete(
                 f"https://claude.ai/api/organizations/{org_id}/chat_conversations/{new_uuid}",
@@ -95,22 +86,9 @@ def main():
             )
         except Exception:
             pass
-
-    elif r.status_code in (401, 403):
-        err_body = r.text[:300]
-        print(f"🚨 [CRITICAL] Sesi terdeteksi kadaluarsa / invalid: {err_body}")
-        alert_msg = (
-            "🚨 [ALERT CLAUDE RELAY] Sesi Claude Terputus!
-
-"
-            f"Server Anthropic menolak sesi aktif (Status {r.status_code}).
-"
-            "Masa berlaku sessionKey habis atau logout terdeteksi. Silakan ekspor cookie baru dari claude.ai untuk Tuan Ciro!"
-        )
-        send_telegram_alert(alert_msg)
-        sys.exit(1)
     else:
-        print(f"⚠️ Respon tidak biasa dari Claude: Status {r.status_code}")
+        print(f"Claude returned status {r.status_code}: {r.text[:200]}")
+        send_telegram_alert(f"Claude Keepalive Status: {r.status_code}")
         sys.exit(1)
 
 if __name__ == "__main__":
